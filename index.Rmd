@@ -182,7 +182,7 @@ Notice that in cluster 2, there are a few distinct low-distance blocks that are 
 
 This may be acceptable depending the biochemical properties of the TCR itself, but we cannot assess those in this analysis. Thus, you may want to re-run the clustering with a smaller `dianaHeight` parameter. It's generally easier to screen more specific clusters with higher confidence that the TCRs are similar, than to try to interpret large, heterogeneous clusters. So, I will re-run the clustering with the default `dianaHeight` parameter of 20 for this demo. 
 
-```{r reset_clustering_diana_20, echo = FALSE}
+```{r reset_clustering_diana_20, echo = FALSE, fig.show = 'hide'}
 seuratObj_CD8s <- RunTcrClustering(
   seuratObj_TCR = seuratObj_CD8s,
   chainsToCluster = NULL, # if null, all assays will be processed
