@@ -14,7 +14,7 @@ To run this analysis locally:
 
 1.  Clone this repository.
 2.  Open `TCR_Clustering_Demo.Rproj` in RStudio.
-3.  Open `TCR_Clustering_Demo.Rmd`.
+3.  Open `index.Rmd`.
 4.  Ensure you have the required packages installed (`tcrClustR`, `tidyverse`, `Rdiscvr`, `rmdformats`, `here`, `ComplexHeatmap`, `circlize`, `lme4`, `ggrepel`, `egg`, `scales`, `CellMembrane`).
 5.  Knit the document.
 
