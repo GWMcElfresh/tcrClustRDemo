@@ -1,0 +1,657 @@
+---
+title: "TCR Clustering Demo"
+author: "GW McElfresh"
+date: "2026-01-07"
+output: 
+  rmdformats::readthedown:
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tcrClustR)
+library(tidyverse)
+Rdiscvr::SetLabKeyDefaults(baseUrl = "https://prime-seq.ohsu.edu", defaultFolder = "/Labs/Bimber")
+```
+
+# Load Data
+
+```{r load_and_process_data}
+# file paths
+cd8_filepath <- here::here("./data/CD8_Stims.rds")
+
+# download
+Rdiscvr::DownloadOutputFile(
+  outputFileId = 785508,
+  outFile = cd8_filepath,
+  overwrite = FALSE
+)
+
+
+# read
+seuratObj_CD8s <- readRDS(cd8_filepath)
+
+# collapse the different gag stims into a single category
+seuratObj_CD8s$Stim <- ifelse(
+  grepl("CM9|Gag", seuratObj_CD8s$Stim),
+  yes = "Gag",
+  no = seuratObj_CD8s$Stim
+)
+```
+
+# Clustering
+
+## Omitted: Run TCR Clustering (Probably already done on prime-seq for your data)
+
+## Tuning Clustering Parameters
+
+TCR clustering is not a one-size-fits-all procedure. Different datasets, TCR chains, organisms, experimental designs, and biological questions may require different clustering parameters.
+
+The fastest way to determine the suitability of a TCR cluster is to use the tooling in `tcrClustR` to visualize the clusters in their native distance space. 
+
+These heatmaps and histograms are critical to our understanding of what the necessary parameterization is. 
+
+The `VisualizeTcrDistances` function iterates through each of the different clusterings/distances calculated on the TCR data, and shows the distance distributions within and between clusters.
+
+There are two primary differences to consider as you begin to tune the clustering parameters. 
+
+1. Which chain are you clustering on? (TRA, TRB, or both)
+1. Are you using full length distances or just CDR3? 
+
+tcrClustR enumerates the different combinations of these two factors and then clusters them, but does so with a single `dianaHeight` parameter value. 
+
+Notice in the heatmaps above that the color scale varies in magnitude. This is because the distance distributions vary between chains and distance types. A `dianaHeight` height of 50 may be reasonable for TRB full-length distances, too large for TRA_CDR3, and too small for TRA+TRB full length distances.
+
+Depending on your assessment, you can re-run the clustering locally with a different `dianaHeight` parameter to better suit your data. This doesn't take long. You may also specify chains, but it is trivial to re-run all chains using a specific height. 
+
+### Visualization Heatmaps
+
+```{r visualize_initial_distances}
+tcrClustR::VisualizeTcrDistances(
+  seuratObj = seuratObj_CD8s,
+  showDimplotLegend = FALSE
+)
+```
+
+### End of Heatmaps
+
+### Local Clustering
+
+#### dianaHeight = 20 (default)
+
+```{r run_clustering_diana_20, eval = FALSE}
+seuratObj_CD8s <- RunTcrClustering(
+  seuratObj_TCR = seuratObj_CD8s,
+  chainsToCluster = NULL, # if null, all assays will be processed
+  clusteringMethod = "DIANA",
+  dianaHeight = 20, # this value, in units of TCR distance, will determine roughly how different clones within the same cluster may be.
+  clusterSizeThreshold = 2, # removes/filters singleton clusters
+  verbose = TRUE
+)
+```
+
+Here's a block that will allow you to visualize the clustering results again after re-clustering with a new parameter using the new height. Most of these are singletons, so they're given a cluster value 0 here, which is converted to an NA in the Seurat Object's metadata. 
+
+```{r heatmap_clustering_diana_20}
+library(ComplexHeatmap)
+library(circlize)
+# helper function for retaining ggplot colors
+gg_color_hue <- function(n) {
+  hues <- seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+tcr_distances <- seuratObj_CD8s@misc$TCR_Distances$TRB_fl$counts
+annotation_df <- seuratObj_CD8s@misc$TCR_Distances$TRB_fl@meta.features
+
+cluster_range <- range(annotation_df$TRB_fl_ClusterIdx, na.rm = TRUE)
+
+col_fun <- colorRamp2(
+  breaks = seq(cluster_range[1], cluster_range[2], length.out = 10),
+  colors = gg_color_hue(10)
+)
+
+top_annotation <- ComplexHeatmap::HeatmapAnnotation(
+  df = annotation_df %>% dplyr::select(TRB_fl_ClusterIdx),
+  col = list(TRB_fl_ClusterIdx = col_fun), # Use the function here
+  show_legend = TRUE,
+  show_annotation_name = TRUE
+)
+
+ComplexHeatmap::Heatmap(
+  as.matrix(tcr_distances),
+  name = "TCR Distance",
+  show_row_names = FALSE,
+  show_column_names = FALSE,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  top_annotation = top_annotation
+)
+```
+
+And then by relaxing the clustering threshold: 
+
+#### dianaHeight = 200
+
+```{r run_clustering_diana_200, echo = FALSE}
+seuratObj_CD8s <- RunTcrClustering(
+  seuratObj_TCR = seuratObj_CD8s,
+  chainsToCluster = NULL, # if null, all assays will be processed
+  clusteringMethod = "DIANA",
+  dianaHeight = 200, # this value, in units of TCR distance, will determine roughly how different clones within the same cluster may be.
+  clusterSizeThreshold = 2, # removes/filters singleton clusters
+  verbose = TRUE
+)
+```
+
+For this specific `dianaHeight` = 200 value, we only get 23 clusters, so we can introspect them visually.
+
+```{r heatmap_clustering_diana_200, fig.width = 10, fig.height = 10}
+tcr_distances <- seuratObj_CD8s@misc$TCR_Distances$TRB_fl$counts
+annotation_df <- seuratObj_CD8s@misc$TCR_Distances$TRB_fl@meta.features
+colors <- gg_color_hue(n = length(unique(annotation_df$TRB_fl_ClusterIdx)))
+names(colors) <- unique(annotation_df$TRB_fl_ClusterIdx)
+
+top_annotation <-
+  ComplexHeatmap::HeatmapAnnotation(
+    df = annotation_df %>%
+      dplyr::select(TRB_fl_ClusterIdx) %>%
+      dplyr::mutate(TRB_fl_ClusterIdx = as.factor(TRB_fl_ClusterIdx)),
+    col = list(TRB_fl_ClusterIdx = colors),
+    show_legend = TRUE,
+    show_annotation_name = TRUE
+  )
+
+ComplexHeatmap::Heatmap(
+  as.matrix(tcr_distances),
+  name = "TCR Distance",
+  show_row_names = FALSE,
+  show_column_names = FALSE,
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  column_split = annotation_df$TRB_fl_ClusterIdx,
+  row_split = annotation_df$TRB_fl_ClusterIdx,
+  top_annotation = top_annotation
+)
+```
+
+Notice that in cluster 2, there are a few distinct low-distance blocks that are now being grouped together. 
+
+This may be acceptable depending the biochemical properties of the TCR itself, but we cannot assess those in this analysis. Thus, you may want to re-run the clustering with a smaller `dianaHeight` parameter. It's generally easier to screen more specific clusters with higher confidence that the TCRs are similar, than to try to interpret large, heterogeneous clusters. So, I will re-run the clustering with the default `dianaHeight` parameter of 20 for this demo. 
+
+```{r reset_clustering_diana_20, echo = FALSE}
+seuratObj_CD8s <- RunTcrClustering(
+  seuratObj_TCR = seuratObj_CD8s,
+  chainsToCluster = NULL, # if null, all assays will be processed
+  clusteringMethod = "DIANA",
+  dianaHeight = 20, # this value, in units of TCR distance, will determine roughly how different clones within the same cluster may be.
+  clusterSizeThreshold = 2, # removes/filters singleton clusters
+  verbose = TRUE
+)
+```
+
+# Visualize Clustering
+
+These data contain PBMCs from subjects (SubjectId) in a variety of stimulation conditions (Stim). We'll evaluate the distribution of TCR clusters (TRB_ClusterIdx) across subjects and stim conditions.
+
+During *in vivo* experiments or stimulations with a sort, we would expect the absolute abundance of clones comprising the TCR clusters to change in response to unobserved/assumed changes antigen exposure or response due to proliferation or increases in cellular trafficking. We don't expect the same of short-term *in vitro* stimulations such as this dataset, but we can tabulate them anyway.
+
+The gross goal of this plot is for clusters with lots of cells in the experiment to rise to the top of this plot, and for clusters with few cells to sink to the bottom. This will help us quickly identify clusters of interest. 
+
+```{r plot_cluster_abundance, fig.width = 10, fig.height = 10, warning=FALSE}
+# Visualize CD8 T cell clustering
+
+plot_df <- seuratObj_CD8s@meta.data %>%
+  group_by(SubjectId, Stim, DatasetId) %>%
+  mutate(total_cells = n()) %>%
+  group_by(SubjectId, Stim, TRB_ClusterIdx, DatasetId, total_cells) %>%
+  summarize(cluster_cells = n()) %>%
+  ungroup()
+
+
+# cellular abundance
+plot_df %>%
+  ggplot(aes(
+    x = DatasetId, y = log10(cluster_cells + 1),
+    label = TRB_ClusterIdx,
+    group = TRB_ClusterIdx,
+    color = SubjectId
+  )) +
+  geom_point() +
+  geom_line(alpha = 0.5) +
+  ggrepel::geom_text_repel(max.overlaps = 15) +
+  facet_wrap(~Stim, scales = "free_x") +
+  egg::theme_article() +
+  theme(axis.text.x = element_blank())
+
+# percentages of total cells per dataset
+plot_df %>%
+  ggplot(aes(
+    x = DatasetId, y = cluster_cells / total_cells,
+    label = TRB_ClusterIdx,
+    group = TRB_ClusterIdx,
+    color = SubjectId
+  )) +
+  geom_point() +
+  geom_line(alpha = 0.5) +
+  ggrepel::geom_text_repel(max.overlaps = 15, show.legend = FALSE) +
+  facet_wrap(~Stim, scales = "free_x") +
+  egg::theme_article() +
+  theme(axis.text.x = element_blank()) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1))
+```
+
+Moreover, one may want to visualize the distribution of clusters in reduced dimensional space, such as a UMAP. For this, it is beneficial to use a whitelist of cluster labels to highlight groups, and compare them to clusters to see if the clonotypes are restricted to specific cellular phenotypes. 
+
+```{r plot_seurat_clusters_of_interest, fig.width = 10, fig.height = 10}
+seuratObj_CD8s$ClustersOfInterest <- ifelse(
+  seuratObj_CD8s$TRB_ClusterIdx %in% c(64, 134),
+  as.character(seuratObj_CD8s$TRB_ClusterIdx),
+  "Other"
+)
+
+CellMembrane::PlotSeuratVariables(
+  xvar = "ClusterNames_0.4",
+  yvar = "ClustersOfInterest",
+  seuratObj = seuratObj_CD8s,
+  label = T
+)
+```
+
+# Activation Status of Cells within Clusters
+
+One may want to evaluate the activation status of cells in specific clusters of interest. This can be done by comparing expression of activation markers across clusters.
+
+Historically, we've done this via thresholding UCell scores on activation signatures, but one could also use classifiers or other methods. Here, I'll create a variable by thresholding a UCell score.
+
+## Define Activated T Cells
+
+```{r define_active_tcells}
+seuratObj_CD8s$ActiveTCell <- ifelse(
+  seuratObj_CD8s$TandNK_ActivationCore_UCell > 0.5,
+  "Activated",
+  "NotActivated"
+)
+```
+
+
+# Visual Investigation of clusters enriched in activated T cells
+
+## The Bimberian Clonotype Plot 
+
+The clonotype plot prioritizes showing clone (or in this case, cluster) activation  proportionally. The main inferences are to assess the clonality of activated cells, or said more simply: whether or not the activated cells come from a single clone/cluster, or multiple. The clonotype plot allows for one to quickly assess the diversity within the current stimulation condition and across stimulation conditions. 
+
+However, It is difficult to interpret the proportions directly due to variability in the size of clones. The activation rate is per dataset, so in datasets with very few activated cells (e.g. 5) the proportion of singletons dominates in a way that is not very obvious to someone unfamiliar with the plot (e.g. few cells [1/5] but a large proportion  [20%]). However, for larger clones, the proportion of activated cells is more stable to small variations in the number of responding clones. So, simplicity (e.g. presentations) is a key usage for this plot, but interpretability suffers.
+
+```{r plot_clonotype_activation, fig.width = 15, fig.height = 15, warning = FALSE, message = FALSE}
+for (subjectid in unique(seuratObj_CD8s$SubjectId)) {
+  clonotype_plot <- Rdiscvr::MakeClonotypePlot(
+    seuratObj = seuratObj_CD8s,
+    subjectId = subjectid,
+    chain = "TRB_ClusterIdx",
+    xFacetField = "Stim",
+    activationFieldName = "TandNK_ActivationCore_UCell",
+    threshold = 0.5,
+  )
+  print(clonotype_plot)
+}
+```
+
+## Scatter Plots
+
+These next plots will greedily sacrifice the simplicity for enhanced interpretability. We'll scatter the number of activated cells against the total number of cells in the cluster for each stimulation condition.
+
+We'll investigate two such scatter plots. The first prioritizes reproducibility over biological replicates (different DatasetId, same subject, same stim). The lines connect points from the same cluster across datasets, so elevated and connected lines represent consistent activation across replicates. These are clones we can recover reliably by sampling, and their response rate is reproducible. 
+
+We'll connect the repeated measures (subje) with lines, so that single dots represent clusters that were only observed in one replicate, and 'streaks' of connected dots represent clusters that were observed in multiple replicates. Consistent slopes indicate that the number of responding cells is reproducible across replicates and should give you confidence in the cluster's response rate. 
+
+
+```{r prepare_activation_scatter_data}
+plot_df <- seuratObj_CD8s@meta.data %>%
+  group_by(SubjectId, DatasetId, TRB_ClusterIdx) %>%
+  mutate(cluster_cells = n()) %>%
+  group_by(SubjectId, Stim, DatasetId, SampleDate, TRB_ClusterIdx, ActiveTCell) %>%
+  summarize(activated_cells = n(), cluster_cells = cluster_cells, proportion = activated_cells / cluster_cells) %>%
+  # this filter removes non-activated T cells and cells without a cluster assignment (singletons and cells with a TCR called, but missing a TRB).
+  filter(ActiveTCell == "Activated" & !is.na(TRB_ClusterIdx)) %>%
+  ungroup() %>%
+  unique.data.frame()
+```
+
+
+```{r plot_activation_reproducibility, fig.width = 15, fig.height = 15, warning=FALSE}
+ggplot(
+  plot_df,
+  aes(
+    x = cluster_cells + 1,
+    y = activated_cells + 1,
+    label = paste0("ID:", TRB_ClusterIdx, ",\n", round(proportion, 2) * 100, "%"),
+    group = TRB_ClusterIdx,
+    color = SubjectId
+  )
+) +
+  geom_abline(linetype = 2, slope = 1, intercept = 0) +
+  ggrepel::geom_text_repel(max.overlaps = 15) +
+  geom_point() +
+  geom_line(alpha = 0.5) +
+  facet_grid(. ~ Stim, scales = "free_x") +
+  egg::theme_article() +
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+The second plot prioritizes biological replicates (different stims, same subject). Here, elevated and connected lines represent consistent activation across stim conditions, which may indicate antigen-specific or non-specific activation motifs (depending on the stimulation condition)
+
+```{r plot_activation_biological_replicates, fig.width = 15, fig.height = 15, warning=FALSE}
+ggplot(
+  plot_df,
+  aes(
+    x = cluster_cells + 1,
+    y = activated_cells + 1,
+    label = paste0("ID:", TRB_ClusterIdx, ",\n", round(proportion, 2) * 100, "%"),
+    group = TRB_ClusterIdx,
+    color = Stim
+  )
+) +
+  geom_abline(linetype = 2, slope = 1, intercept = 0) +
+  ggrepel::geom_text_repel(max.overlaps = 15, show.legend = FALSE) +
+  geom_point() +
+  geom_line(alpha = 0.5) +
+  facet_grid(. ~ SubjectId, scales = "free_x") +
+  egg::theme_article() +
+  scale_x_log10() +
+  scale_y_log10() +
+  xlab("Total Cells in Cluster + 1 (log10 scale)") +
+  ylab("Activated Cells in Cluster + 1 (log10 scale)")
+```
+
+
+See specifically: this sub-panel (Subject 32726) whose cluster 64 and cluster 260 shows right-skewed (large & activated) populations. 
+
+```{r highlight_clusters_64_260, warning = FALSE}
+highlight_df <- plot_df %>%
+  mutate(Stim = factor(Stim)) %>%
+  filter(SubjectId == "32726", .preserve = TRUE) %>%
+  filter(TRB_ClusterIdx %in% c(64, 260), .preserve = TRUE)
+
+ggplot(
+  highlight_df,
+  aes(
+    x = cluster_cells + 1,
+    y = activated_cells + 1,
+    label = paste0("ID:", TRB_ClusterIdx, ",\n", round(proportion, 2) * 100, "%"),
+    group = TRB_ClusterIdx,
+    color = Stim,
+    shape = Stim
+  )
+) +
+  geom_abline(linetype = 2, , slope = 1, intercept = 0) +
+  ggrepel::geom_text_repel(max.overlaps = 15, show.legend = FALSE) +
+  geom_point() +
+  geom_line(alpha = 0.5) +
+  facet_grid(~SubjectId, scales = "free_x") +
+  egg::theme_article() +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_color_manual(values = gg_color_hue(n = 7)[c(1, 6, 7)])
+```
+
+
+Cluster 64, while containing a large number of activated cells in the VY9 stimulated condition, is also high for cells in the unstimulated condition (purple), suggesting that this cluster contains cytokine producing T cells that are not TCR specific.
+
+Cluster 260, however, is almost exclusively activated in the VY9 and AN10  stimulated condition, suggesting that this cluster contains an antigen-specific TCR motif.
+
+# Statistics
+
+## Part I: Quick, but shameful. 
+
+We can perform statistical tests to identify clusters that are significantly enriched for activated T cells compared to the rest of the T cell population. I'm prioritizing exploratory work in this demo, at the expense of publishable methods.  
+
+First, I'll describe the lowest bar to get a p value. In general, do not do this. As long as **you aren't going to report this p value anywhere**, I'm fine with internal use for filtering. We'll use a Fisher's Exact Test to compare the number of activated vs. non-activated cells in each cluster against all other cells.
+
+When we do statistics, we make assumptions. These are those such assumptions: 
+1. I care about the specific activation rate of a cluster (probably always true).
+1. I think that the other clusters' represent reasonable background rates of activation. (not necessarily true).
+1. Clusters are truly independent of each other (probably never true, due to subject-level V/D/J biasing and dataset-dependent detection rates).
+
+Gross violation of assumption 3 means that the p-values we get are not valid, as some samples/subjects may be more prone to activation than others, have different baseline activation rates, and clusters may share TCR motifs that make them more or less likely to be activated. However, if we use these p-values as a heuristic to identify clusters of interest for further study (i.e. rank them and look at the top 10), this is acceptable.
+
+```{r calc_fisher_exact_test}
+# p value adjustment method
+# you can use 'holm' for greater stringency, but 'BH' is a reasonable default.
+p_method <- "BH"
+
+# sidedness for fisher:
+# other options are 'less' and 'two.sided'
+# I care only about clusters with elevated activation rates, so I'll use 'greater'.
+sidedness <- "greater"
+
+stat_results <- plot_df %>%
+  group_by(SubjectId, Stim, TRB_ClusterIdx) %>%
+  summarize(
+    activated_cells = sum(activated_cells),
+    total_cells = sum(cluster_cells)
+  ) %>%
+  ungroup() %>%
+  rowwise() %>%
+  mutate(non_activated_cells = total_cells - activated_cells) %>%
+  mutate(
+    other_activated_cells = sum(plot_df$activated_cells) - activated_cells,
+    other_non_activated_cells = sum(plot_df$cluster_cells) - total_cells - other_activated_cells
+  ) %>%
+  rowwise() %>%
+  mutate(fisher_p_value = fisher.test(
+    matrix(
+      c(
+        activated_cells,
+        non_activated_cells,
+        other_activated_cells,
+        other_non_activated_cells
+      ),
+      nrow = 2
+    ),
+    alternative = sidedness
+  )$p.value) %>%
+  ungroup() %>%
+  # you may change the adjust method here to 'holm', but always adjust your p values.
+  mutate(adj_p_value = p.adjust(fisher_p_value, method = "BH"))
+
+stat_results %>%
+  arrange(adj_p_value)
+```
+
+With a p value, we can use a volcano plot to identify clusters with both high activation proportions and significant p values.
+
+Notice: 
+
+- we rediscover the clusters we highlighted before (64 and 260 in subject 32726)
+- we pooled the data across technical replicates (DatasetId) for this analysis, so if a cluster was only observed in one replicate, we should trust it less, but the fisher's exact test doesn't know anything about that. 
+
+```{r plot_volcano_stats, warning = FALSE}
+ggplot(
+  stat_results,
+  aes(
+    x = activated_cells / total_cells,
+    y = -log10(adj_p_value),
+    label = TRB_ClusterIdx,
+    color = SubjectId,
+    shape = Stim
+  )
+) +
+  geom_point() +
+  ggrepel::geom_text_repel(max.overlaps = 15, show.legend = F) +
+  egg::theme_article() +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  xlab("Percentage of Activated Cells in Cluster") +
+  ylab("-log10 Adjusted P Value")
+```
+
+## Part II: Slow, painstaking, and more appropriate. 
+
+Logistic regression or mixed-effects models would be a better approach to account for these intra-subject and intra-dataset correlations, but are reliant on knowing the experimental design, structure of the data of your experiment, and the likely biological correlations therein. Exhaustively listing these factors in general is both impossible and beyond the scope of this demo.
+
+For specifically this experiment, I want to compare the AN10 and VY9 stims against their respective NoStim condition. I'll subset the data to only include these three conditions in a logistic regression to test if the activation rates are different between stims in each cluster. A finalized version of this analysis would include all clusters, and then I would correct their p values. For demonstration purposes, I'll just test the two clusters we highlighted before (64 and 260).
+
+```{r run_mixed_effects_model}
+library(lme4)
+subset_df <- seuratObj_CD8s@meta.data %>%
+  # define activation state
+  mutate(IsActive = ifelse(TandNK_ActivationCore_UCell > 0.5,
+    yes = "Activated",
+    no = "NotActivated"
+  )) %>%
+  # binarize for logistic regression
+  mutate(IsActive = ifelse(IsActive == "Activated", 1, 0)) %>%
+  filter(Stim %in% c("AN10", "VY9", "NoStim")) %>%
+  mutate(
+    Stim = factor(Stim, levels = c("NoStim", "AN10", "VY9")),
+    SubjectId = factor(SubjectId)
+  ) %>%
+  filter(!is.na(TRB_ClusterIdx)) %>%
+  filter(TRB_ClusterIdx == 64 | TRB_ClusterIdx == 260)
+
+mixed_effects_results <- data.frame()
+
+for (cluster in unique(subset_df$TRB_ClusterIdx)) {
+  cluster_data <- subset_df %>%
+    # define in-cluster status
+    mutate(InCluster = ifelse(TRB_ClusterIdx == cluster, 1, 0)) %>%
+    # subset to cluster
+    filter(InCluster == 1) %>%
+    dplyr::select(IsActive, Stim, SubjectId, DatasetId)
+
+  if (nrow(cluster_data) < 10) {
+    print(paste("Skipping cluster", cluster, "due to insufficient data"))
+    print(paste0("Only ", nrow(cluster_data), "cells."))
+    next
+  } else if (length(unique(cluster_data$Stim)) < 2) {
+    next
+  }
+
+  model <- glmer(
+    IsActive ~ Stim +
+      (1 | SubjectId) +
+      (1 | DatasetId),
+    data = cluster_data,
+    family = binomial
+  )
+
+  summary_model <- summary(model)
+  coef_AN10 <- summary_model$coefficients["StimAN10", ]
+  coef_VY9 <- summary_model$coefficients["StimVY9", ]
+  odds_ratio_AN10 <- exp(coef_AN10[1])
+  odds_ratio_VY9 <- exp(coef_VY9[1])
+  cat("Cluster:", cluster, "Odds Ratio for AN10 vs NoStim:", odds_ratio_AN10, "\n")
+  cat("Cluster:", cluster, "Odds Ratio for VY9 vs NoStim:", odds_ratio_VY9, "\n")
+  # extract p values
+  p_value_AN10 <- coef(summary_model)[2, 4]
+  p_value_VY9 <- coef(summary_model)[3, 4]
+
+  cat("Cluster:", cluster, "P-value for AN10 vs NoStim:", p_value_AN10, "\n")
+  cat("Cluster:", cluster, "P-value for VY9 vs NoStim:", p_value_VY9, "\n")
+  mixed_effects_results <- rbind(
+    mixed_effects_results,
+    data.frame(
+      Cluster = cluster,
+      OddsRatio_AN10 = odds_ratio_AN10,
+      PValue_AN10 = p_value_AN10,
+      OddsRatio_VY9 = odds_ratio_VY9,
+      PValue_VY9 = p_value_VY9
+    )
+  )
+}
+```
+
+
+## Comparison
+
+Then we can compare the two statistical tests we performed (subject/ agnostic activation rates with a stim-specific fisher exact test, and stim-specific activation rates with a mixed-effects logistic regression).
+
+Vertical and horizontal lines are a common p value threshold of 0.05. 
+
+```{r compare_stats_models, warning = FALSE}
+mixed_effects_results %>%
+  pivot_longer(
+    cols = c(PValue_VY9, PValue_AN10),
+    names_to = "Stim",
+    values_to = "PValue"
+  ) %>%
+  mutate(Stim = ifelse(Stim == "PValue_VY9", "VY9", "AN10")) %>%
+  left_join(
+    stat_results %>%
+      filter(TRB_ClusterIdx %in% mixed_effects_results$Cluster),
+    by = c("Cluster" = "TRB_ClusterIdx", "Stim" = "Stim")
+  ) %>%
+  pivot_longer(
+    cols = starts_with("PValue"),
+    names_to = "Test",
+    values_to = "PValue"
+  ) %>%
+  ggplot(aes(
+    x = -log10(fisher_p_value),
+    y = -log10(PValue),
+    label = Cluster,
+    color = Stim,
+    shape = SubjectId
+  )) +
+  geom_point() +
+  geom_vline(xintercept = -log10(0.05), linetype = 2, alpha = 0.3) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2, alpha = 0.3) +
+  ggrepel::geom_text_repel(max.overlaps = 15, show.legend = FALSE) +
+  egg::theme_article() +
+  xlab("-log10 Fisher's Exact Test P Value") +
+  ylab("-log10 Mixed Effects Logistic Regression P Value")
+```
+
+We can see that in general, the p values from the fisher exact test are much smaller, likely due to the violation of independence assumptions we discussed earlier. The mixed-effects model accounts for intra-subject and intra-dataset correlations, leading to more conservative p values. 
+
+Let's look specifically at cluster 260:
+
+```{r compare_stats_cluster_260, warning = FALSE}
+mixed_effects_results %>%
+  pivot_longer(
+    cols = c(PValue_VY9, PValue_AN10),
+    names_to = "Stim",
+    values_to = "PValue"
+  ) %>%
+  mutate(Stim = ifelse(Stim == "PValue_VY9", "VY9", "AN10")) %>%
+  left_join(
+    stat_results %>%
+      filter(TRB_ClusterIdx %in% mixed_effects_results$Cluster),
+    by = c("Cluster" = "TRB_ClusterIdx", "Stim" = "Stim")
+  ) %>%
+  pivot_longer(
+    cols = starts_with("PValue"),
+    names_to = "Test",
+    values_to = "PValue"
+  ) %>%
+  filter(Cluster == 260) %>%
+  dplyr::select(Cluster, Stim, Test, PValue, fisher_p_value, SubjectId) %>%
+  unique.data.frame() %>%
+  ggplot(aes(
+    x = -log10(fisher_p_value),
+    y = -log10(PValue),
+    label = Cluster,
+    color = Stim,
+    shape = SubjectId
+  )) +
+  geom_point() +
+  geom_vline(xintercept = -log10(0.05), linetype = 2, alpha = 0.3) +
+  geom_hline(yintercept = -log10(0.05), linetype = 2, alpha = 0.3) +
+  ggrepel::geom_text_repel(max.overlaps = 15, show.legend = FALSE) +
+  egg::theme_article() +
+  facet_wrap(~Test) +
+  xlab("-log10 Fisher's Exact Test P Value") +
+  ylab("-log10 Mixed Effects Logistic Regression P Value")
+```
+
+To be more blunt about the ramifications: the number of atoms in the universe is 10^78 to 10^82. If the p value claims that the null hypothesis has a smaller chance of observing the test statistic than randomly plucking a specific atom from the entire universe, that is a sign that the statistical test has been misused. 
+
+# Conclusions
+
+Now, you are empowered to visualize TCR clusters, evaluate their activation status, perform both basic statistical tests and a basic introduction to deal with confounding variables in these analyses, and tune the clustering post-hoc. Remember to visualize your data, consider the assumptions behind your statistical tests, and choose methods that best fit your experimental design and data structure. 
+
+Happy clustering!
+
+
+
